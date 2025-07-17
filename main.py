@@ -169,8 +169,32 @@ async def handle_interval_input(update: Update, context: ContextTypes.DEFAULT_TY
             "🔹 مثال: 5 أو 10 أو 15\n"
             "🔹 من 1 إلى 60 دقيقة\n\n"
             "💡 جرب مرة أخرى:",
-            reply_markup=get_keyboard()
-        )
+async def process_message_queue():
+    """معالجة رسائل التذكير من الـ queue"""
+    while message_queue:
+        try:
+            msg_data = message_queue.pop(0)
+            await application.bot.send_message(
+                chat_id=msg_data['user_id'],
+                text=msg_data['message']
+            )
+        except Exception as e:
+            logger.error(f"فشل إرسال الرسالة: {e}")
+
+def run_schedule():
+    """تشغيل المهام المجدولة"""
+    while True:
+        schedule.run_pending()
+        # معالجة الرسائل المؤجلة
+        if message_queue:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(process_message_queue())
+                loop.close()
+            except Exception as e:
+                logger.error(f"خطأ في معالجة الرسائل: {e}")
+        time.sleep(1)
 
 async def my_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض إعدادات المستخدم"""
