@@ -17,7 +17,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Token البوت (احصل عليه من BotFather)
-BOT_TOKEN = os.environ.get('BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '7476661316:AAE3JO7zSVogD7kmgDakrxxj5WyzfOTTBvk')
 
 # تخزين بيانات المستخدمين في الذاكرة
 users_data = {}
