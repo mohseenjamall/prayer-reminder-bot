@@ -8,6 +8,7 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import random
 import json
+import asyncio
 
 # إعداد التسجيل
 logging.basicConfig(
@@ -265,8 +266,9 @@ def start_user_reminders(user_id: int):
             # اختيار رسالة عشوائية
             message = random.choice(prayer_messages)
             
-            # إرسال الرسالة
-            application.create_task(send_reminder_message(user_id, message))
+            # إرسال الرسالة مباشرة
+            import asyncio
+            asyncio.create_task(send_reminder_message(user_id, message))
             
         except Exception as e:
             logger.error(f"خطأ في إرسال التذكير للمستخدم {user_id}: {e}")
