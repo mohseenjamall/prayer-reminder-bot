@@ -61,6 +61,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'created_at': datetime.now().isoformat(),
             'last_reminder': None
         }
+        # بدء التذكيرات للمستخدم الجديد
+        start_user_reminders(user_id)
+    else:
+        # إذا كان المستخدم موجود وتم إيقاف التذكيرات، نعيد تشغيلها
+        if users_data[user_id]['is_active'] and user_id not in scheduled_jobs:
+            start_user_reminders(user_id)
     
     welcome_message = f"""
 🌟 أهلاً وسهلاً {username}!
