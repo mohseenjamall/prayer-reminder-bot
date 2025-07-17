@@ -26,6 +26,8 @@ users_data = {}
 scheduled_jobs = {}
 # الفترة الافتراضية (10 دقائق)
 DEFAULT_INTERVAL = 10
+# queue للرسائل
+message_queue = []
 
 # رسائل الصلاة على النبي
 prayer_messages = [
@@ -255,6 +257,11 @@ def start_user_reminders(user_id: int):
     if user_id not in users_data:
         return
     
+    # إيقاف أي تذكيرات سابقة أولاً
+    if user_id in scheduled_jobs:
+        schedule.cancel_job(scheduled_jobs[user_id])
+        del scheduled_jobs[user_id]
+    
     interval = users_data[user_id]['interval']
     
     def send_reminder():
@@ -266,11 +273,11 @@ def start_user_reminders(user_id: int):
             # اختيار رسالة عشوائية
             message = random.choice(prayer_messages)
             
-            # إرسال الرسالة باستخدام المتغير العلوي
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(send_reminder_message(user_id, message))
-            loop.close()
+            # إضافة الرسالة للـ queue بدلاً من الإرسال المباشر
+            message_queue.append({
+                'user_id': user_id,
+                'message': f"{message}\n\n💫 تذكير من بوت الصلاة على النبي ﷺ"
+            })
             
         except Exception as e:
             logger.error(f"خطأ في إرسال التذكير للمستخدم {user_id}: {e}")
@@ -292,16 +299,6 @@ def restart_user_reminders(user_id: int):
     if users_data[user_id]['is_active']:
         start_user_reminders(user_id)
 
-async def send_reminder_message(user_id: int, message: str):
-    """إرسال رسالة التذكير"""
-    try:
-        await application.bot.send_message(
-            chat_id=user_id,
-            text=f"{message}\n\n💫 تذكير من بوت الصلاة على النبي ﷺ"
-        )
-    except Exception as e:
-        logger.error(f"فشل إرسال التذكير للمستخدم {user_id}: {e}")
-
 async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """معالجة الرسائل النصية"""
     user_id = update.effective_user.id
@@ -314,16 +311,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
         # إذا كان ينتظر إدخال فترة
         if user_data.get('awaiting_interval'):
             await handle_interval_input(update, context)
-            return
-        
-        # إذا كان ينتظر إدخال وقت
-        if user_data.get('awaiting_time'):
-            await handle_time_input(update, context)
-            return
-        
-        # إذا كان ينتظر حذف وقت
-        if user_data.get('awaiting_delete'):
-            await handle_delete_time(update, context)
             return
     
     # معالجة الأزرار
@@ -345,12 +332,6 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             "🔹 أو اكتب /help للمساعدة",
             reply_markup=get_keyboard()
         )
-
-def run_schedule():
-    """تشغيل المهام المجدولة"""
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
 
 def main():
     """الدالة الرئيسية"""
