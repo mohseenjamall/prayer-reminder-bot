@@ -266,9 +266,11 @@ def start_user_reminders(user_id: int):
             # اختيار رسالة عشوائية
             message = random.choice(prayer_messages)
             
-            # إرسال الرسالة مباشرة
-            import asyncio
-            asyncio.create_task(send_reminder_message(user_id, message))
+            # إرسال الرسالة باستخدام المتغير العلوي
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(send_reminder_message(user_id, message))
+            loop.close()
             
         except Exception as e:
             logger.error(f"خطأ في إرسال التذكير للمستخدم {user_id}: {e}")
