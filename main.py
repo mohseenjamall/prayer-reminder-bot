@@ -23,6 +23,8 @@ BOT_TOKEN = os.environ.get('BOT_TOKEN', '7476661316:AAE3JO7zSVogD7kmgDakrxxj5Wyz
 users_data = {}
 # تخزين المهام المجدولة
 scheduled_jobs = {}
+# الفترة الافتراضية (10 دقائق)
+DEFAULT_INTERVAL = 10
 
 # رسائل الصلاة على النبي
 prayer_messages = [
@@ -39,9 +41,9 @@ prayer_messages = [
 def get_keyboard():
     """لوحة مفاتيح مخصصة"""
     keyboard = [
-        [KeyboardButton("⏰ إضافة وقت تذكير"), KeyboardButton("📋 أوقاتي")],
-        [KeyboardButton("🗑️ حذف وقت"), KeyboardButton("⏹️ إيقاف التذكيرات")],
-        [KeyboardButton("▶️ تشغيل التذكيرات"), KeyboardButton("ℹ️ المساعدة")]
+        [KeyboardButton("⏰ تغيير الفترة"), KeyboardButton("📋 إعداداتي")],
+        [KeyboardButton("⏹️ إيقاف التذكيرات"), KeyboardButton("▶️ تشغيل التذكيرات")],
+        [KeyboardButton("ℹ️ المساعدة")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -54,9 +56,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in users_data:
         users_data[user_id] = {
             'username': username,
-            'reminders': [],
+            'interval': DEFAULT_INTERVAL,  # الفترة الافتراضية
             'is_active': True,
-            'created_at': datetime.now().isoformat()
+            'created_at': datetime.now().isoformat(),
+            'last_reminder': None
         }
     
     welcome_message = f"""
@@ -65,13 +68,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🤲 هذا بوت تذكير الصلاة على النبي محمد ﷺ
 
 📱 الميزات المتاحة:
-• إضافة أوقات متعددة للتذكير
+• تذكير كل {DEFAULT_INTERVAL} دقائق (افتراضي)
+• يمكن تغيير الفترة من 1 دقيقة إلى 60 دقيقة
 • رسائل تذكير متنوعة
 • تحكم كامل في التذكيرات
 
 🎯 استخدم الأزرار بالأسفل أو الأوامر:
-/add_time - إضافة وقت جديد
-/my_times - عرض أوقاتي
+/set_interval - تغيير فترة التذكير
+/my_settings - عرض إعداداتي
 /help - المساعدة
 
 بارك الله فيك! 🌹
@@ -84,177 +88,129 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 📖 دليل استخدام البوت:
 
 🔹 الأوامر الأساسية:
-• /add_time - إضافة وقت تذكير جديد
-• /my_times - عرض جميع أوقاتي
-• /delete_time - حذف وقت معين
-• /stop - إيقاف جميع التذكيرات
+• /set_interval - تغيير فترة التذكير
+• /my_settings - عرض إعداداتي الحالية
+• /stop - إيقاف التذكيرات
 • /start_reminders - تشغيل التذكيرات
 
-🔹 تنسيق الوقت:
-• 24 ساعة: 14:30
-• 12 ساعة: 2:30 PM
-• أمثلة: 07:00 أو 7:00 AM
+🔹 فترات التذكير المتاحة:
+• من 1 دقيقة إلى 60 دقيقة
+• الافتراضي: 10 دقائق
+• أمثلة: 5 دقائق، 15 دقيقة، 30 دقيقة
 
 🔹 مثال على الاستخدام:
-1. اضغط "إضافة وقت تذكير"
-2. اكتب الوقت مثل: 08:00
-3. سيتم إرسال التذكير يومياً
+1. اضغط "تغيير الفترة"
+2. اكتب رقم من 1 إلى 60
+3. سيتم التذكير كل هذا العدد من الدقائق
 
 🤲 بارك الله فيك!
 """
     await update.message.reply_text(help_text, reply_markup=get_keyboard())
 
-async def add_time_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بدء إضافة وقت جديد"""
+async def set_interval_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بدء تغيير فترة التذكير"""
     await update.message.reply_text(
-        "⏰ أرسل الوقت الذي تريد التذكير فيه\n\n"
-        "🔹 أمثلة:\n"
-        "• 08:00 (الثامنة صباحاً)\n"
-        "• 14:30 (الثانية والنصف ظهراً)\n"
-        "• 20:00 (الثامنة مساءً)\n\n"
-        "📝 اكتب الوقت فقط بالتنسيق المطلوب:"
+        "⏰ أرسل فترة التذكير بالدقائق\n\n"
+        "🔹 الحد الأدنى: 1 دقيقة\n"
+        "🔹 الحد الأقصى: 60 دقيقة\n"
+        "🔹 الافتراضي: 10 دقائق\n\n"
+        "📝 أمثلة: 5 أو 15 أو 30\n\n"
+        "اكتب الرقم فقط:"
     )
-    # تسجيل أن المستخدم في حالة إضافة وقت
-    users_data[update.effective_user.id]['awaiting_time'] = True
+    # تسجيل أن المستخدم في حالة تغيير الفترة
+    users_data[update.effective_user.id]['awaiting_interval'] = True
 
-async def handle_time_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة إدخال الوقت"""
+async def handle_interval_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """معالجة إدخال فترة التذكير"""
     user_id = update.effective_user.id
-    time_text = update.message.text.strip()
+    interval_text = update.message.text.strip()
     
-    # التحقق من صحة الوقت
     try:
-        # محاولة تحويل النص إلى وقت
-        time_obj = datetime.strptime(time_text, '%H:%M').time()
+        interval = int(interval_text)
         
-        # إضافة الوقت للمستخدم
-        if user_id in users_data:
-            if time_text not in users_data[user_id]['reminders']:
-                users_data[user_id]['reminders'].append(time_text)
-                users_data[user_id]['awaiting_time'] = False
-                
-                # جدولة المهمة
-                schedule_user_reminder(user_id, time_text)
-                
-                await update.message.reply_text(
-                    f"✅ تم إضافة التذكير بنجاح!\n"
-                    f"🕐 الوقت: {time_text}\n"
-                    f"📅 سيتم التذكير يومياً في هذا الوقت\n\n"
-                    f"🤲 بارك الله فيك!",
-                    reply_markup=get_keyboard()
-                )
-            else:
-                await update.message.reply_text(
-                    f"⚠️ هذا الوقت ({time_text}) موجود مسبقاً!\n"
-                    f"جرب وقت آخر أو استخدم /my_times لعرض أوقاتك",
-                    reply_markup=get_keyboard()
-                )
+        # التحقق من صحة الفترة
+        if 1 <= interval <= 60:
+            # تحديث الفترة
+            users_data[user_id]['interval'] = interval
+            users_data[user_id]['awaiting_interval'] = False
+            
+            # إعادة جدولة التذكيرات
+            if users_data[user_id]['is_active']:
+                restart_user_reminders(user_id)
+            
+            await update.message.reply_text(
+                f"✅ تم تغيير فترة التذكير بنجاح!\n"
+                f"⏰ الفترة الجديدة: كل {interval} دقيقة\n\n"
+                f"🔄 إذا كانت التذكيرات مفعلة، ستعمل بالفترة الجديدة\n\n"
+                f"🤲 بارك الله فيك!",
+                reply_markup=get_keyboard()
+            )
         else:
             await update.message.reply_text(
-                "❌ حدث خطأ! استخدم /start أولاً",
+                "❌ الفترة خارج النطاق المسموح!\n\n"
+                "🔹 الحد الأدنى: 1 دقيقة\n"
+                "🔹 الحد الأقصى: 60 دقيقة\n\n"
+                "💡 جرب رقم آخر:",
                 reply_markup=get_keyboard()
             )
             
     except ValueError:
         await update.message.reply_text(
-            "❌ تنسيق الوقت غير صحيح!\n\n"
-            "🔹 استخدم التنسيق: HH:MM\n"
-            "🔹 مثال: 08:30 أو 14:15\n\n"
+            "❌ يرجى إدخال رقم صحيح!\n\n"
+            "🔹 مثال: 5 أو 10 أو 15\n"
+            "🔹 من 1 إلى 60 دقيقة\n\n"
             "💡 جرب مرة أخرى:",
             reply_markup=get_keyboard()
         )
 
-async def my_times(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """عرض أوقات المستخدم"""
+async def my_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """عرض إعدادات المستخدم"""
     user_id = update.effective_user.id
     
-    if user_id not in users_data or not users_data[user_id]['reminders']:
+    if user_id not in users_data:
         await update.message.reply_text(
-            "📋 لم تقم بإضافة أي أوقات تذكير بعد\n\n"
-            "🔹 استخدم /add_time لإضافة وقت جديد",
+            "❌ استخدم /start أولاً",
             reply_markup=get_keyboard()
         )
         return
     
-    times_list = "\n".join([f"🕐 {time}" for time in users_data[user_id]['reminders']])
-    status = "🟢 مفعل" if users_data[user_id]['is_active'] else "🔴 متوقف"
+    user_data = users_data[user_id]
+    interval = user_data['interval']
+    status = "🟢 مفعل" if user_data['is_active'] else "🔴 متوقف"
+    last_reminder = user_data.get('last_reminder', 'لم يتم إرسال تذكير بعد')
+    
+    if last_reminder and last_reminder != 'لم يتم إرسال تذكير بعد':
+        last_reminder = datetime.fromisoformat(last_reminder).strftime('%Y-%m-%d %H:%M')
     
     message = f"""
-📋 أوقات التذكير الخاصة بك:
+📋 إعداداتك الحالية:
 
-{times_list}
-
+⏰ فترة التذكير: كل {interval} دقيقة
 📊 الحالة: {status}
-🔢 العدد: {len(users_data[user_id]['reminders'])} تذكير
+🕐 آخر تذكير: {last_reminder}
 
-🔹 لحذف وقت معين استخدم /delete_time
+🔹 لتغيير الفترة استخدم /set_interval
 🔹 لإيقاف التذكيرات استخدم /stop
+🔹 لتشغيل التذكيرات استخدم /start_reminders
 """
     
     await update.message.reply_text(message, reply_markup=get_keyboard())
 
-async def delete_time_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """بدء حذف وقت"""
-    user_id = update.effective_user.id
-    
-    if user_id not in users_data or not users_data[user_id]['reminders']:
-        await update.message.reply_text(
-            "📋 لا توجد أوقات محفوظة للحذف\n\n"
-            "🔹 استخدم /add_time لإضافة وقت جديد",
-            reply_markup=get_keyboard()
-        )
-        return
-    
-    times_list = "\n".join([f"🕐 {time}" for time in users_data[user_id]['reminders']])
-    
-    await update.message.reply_text(
-        f"🗑️ اختر الوقت الذي تريد حذفه:\n\n{times_list}\n\n"
-        f"📝 اكتب الوقت بالضبط كما هو موضح أعلاه:"
-    )
-    
-    users_data[user_id]['awaiting_delete'] = True
-
-async def handle_delete_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """معالجة حذف الوقت"""
-    user_id = update.effective_user.id
-    time_text = update.message.text.strip()
-    
-    if user_id in users_data and time_text in users_data[user_id]['reminders']:
-        users_data[user_id]['reminders'].remove(time_text)
-        users_data[user_id]['awaiting_delete'] = False
-        
-        # إلغاء المهمة المجدولة
-        cancel_user_reminder(user_id, time_text)
-        
-        await update.message.reply_text(
-            f"✅ تم حذف التذكير بنجاح!\n"
-            f"🕐 الوقت المحذوف: {time_text}\n\n"
-            f"📋 استخدم /my_times لعرض الأوقات المتبقية",
-            reply_markup=get_keyboard()
-        )
-    else:
-        await update.message.reply_text(
-            "❌ الوقت المدخل غير موجود!\n\n"
-            "📋 استخدم /my_times لعرض أوقاتك الصحيحة",
-            reply_markup=get_keyboard()
-        )
-
 async def stop_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """إيقاف جميع التذكيرات"""
+    """إيقاف التذكيرات"""
     user_id = update.effective_user.id
     
     if user_id in users_data:
         users_data[user_id]['is_active'] = False
         
-        # إلغاء جميع المهام المجدولة للمستخدم
+        # إلغاء المهمة المجدولة للمستخدم
         if user_id in scheduled_jobs:
-            for job in scheduled_jobs[user_id]:
-                schedule.cancel_job(job)
+            schedule.cancel_job(scheduled_jobs[user_id])
             del scheduled_jobs[user_id]
         
         await update.message.reply_text(
-            "⏹️ تم إيقاف جميع التذكيرات\n\n"
-            "🔹 أوقاتك محفوظة ويمكنك إعادة تشغيلها\n"
+            "⏹️ تم إيقاف التذكيرات\n\n"
+            "🔹 إعداداتك محفوظة ويمكنك إعادة تشغيلها\n"
             "🔹 استخدم /start_reminders لإعادة التشغيل",
             reply_markup=get_keyboard()
         )
@@ -271,15 +227,14 @@ async def start_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in users_data:
         users_data[user_id]['is_active'] = True
         
-        # إعادة جدولة جميع التذكيرات
-        for reminder_time in users_data[user_id]['reminders']:
-            schedule_user_reminder(user_id, reminder_time)
+        # بدء التذكيرات بالفترة المحددة
+        start_user_reminders(user_id)
         
-        count = len(users_data[user_id]['reminders'])
+        interval = users_data[user_id]['interval']
         await update.message.reply_text(
             f"▶️ تم تشغيل التذكيرات بنجاح!\n\n"
-            f"🔢 عدد التذكيرات: {count}\n"
-            f"📋 استخدم /my_times لعرض أوقاتك",
+            f"⏰ الفترة: كل {interval} دقيقة\n"
+            f"📋 استخدم /my_settings لعرض إعداداتك",
             reply_markup=get_keyboard()
         )
     else:
@@ -288,37 +243,44 @@ async def start_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_keyboard()
         )
 
-def schedule_user_reminder(user_id: int, reminder_time: str):
-    """جدولة تذكير للمستخدم"""
+def start_user_reminders(user_id: int):
+    """بدء تذكيرات المستخدم"""
+    if user_id not in users_data:
+        return
+    
+    interval = users_data[user_id]['interval']
+    
     def send_reminder():
         """إرسال التذكير"""
         try:
+            # تحديث وقت آخر تذكير
+            users_data[user_id]['last_reminder'] = datetime.now().isoformat()
+            
             # اختيار رسالة عشوائية
             message = random.choice(prayer_messages)
             
-            # إرسال الرسالة (سيتم تنفيذها بواسطة الـ job scheduler)
+            # إرسال الرسالة
             application.create_task(send_reminder_message(user_id, message))
             
         except Exception as e:
             logger.error(f"خطأ في إرسال التذكير للمستخدم {user_id}: {e}")
     
     # إنشاء المهمة المجدولة
-    job = schedule.every().day.at(reminder_time).do(send_reminder)
+    job = schedule.every(interval).minutes.do(send_reminder)
     
     # حفظ المهمة
-    if user_id not in scheduled_jobs:
-        scheduled_jobs[user_id] = []
-    scheduled_jobs[user_id].append(job)
+    scheduled_jobs[user_id] = job
 
-def cancel_user_reminder(user_id: int, reminder_time: str):
-    """إلغاء تذكير معين"""
+def restart_user_reminders(user_id: int):
+    """إعادة تشغيل تذكيرات المستخدم بفترة جديدة"""
+    # إيقاف التذكيرات الحالية
     if user_id in scheduled_jobs:
-        # البحث عن المهمة وإلغاؤها
-        for job in scheduled_jobs[user_id][:]:
-            if hasattr(job, 'at_time') and str(job.at_time) == reminder_time:
-                schedule.cancel_job(job)
-                scheduled_jobs[user_id].remove(job)
-                break
+        schedule.cancel_job(scheduled_jobs[user_id])
+        del scheduled_jobs[user_id]
+    
+    # بدء التذكيرات بالفترة الجديدة
+    if users_data[user_id]['is_active']:
+        start_user_reminders(user_id)
 
 async def send_reminder_message(user_id: int, message: str):
     """إرسال رسالة التذكير"""
@@ -339,6 +301,11 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
     if user_id in users_data:
         user_data = users_data[user_id]
         
+        # إذا كان ينتظر إدخال فترة
+        if user_data.get('awaiting_interval'):
+            await handle_interval_input(update, context)
+            return
+        
         # إذا كان ينتظر إدخال وقت
         if user_data.get('awaiting_time'):
             await handle_time_input(update, context)
@@ -350,12 +317,10 @@ async def handle_text_messages(update: Update, context: ContextTypes.DEFAULT_TYP
             return
     
     # معالجة الأزرار
-    if text == "⏰ إضافة وقت تذكير":
-        await add_time_start(update, context)
-    elif text == "📋 أوقاتي":
-        await my_times(update, context)
-    elif text == "🗑️ حذف وقت":
-        await delete_time_start(update, context)
+    if text == "⏰ تغيير الفترة":
+        await set_interval_start(update, context)
+    elif text == "📋 إعداداتي":
+        await my_settings(update, context)
     elif text == "⏹️ إيقاف التذكيرات":
         await stop_reminders(update, context)
     elif text == "▶️ تشغيل التذكيرات":
@@ -387,9 +352,8 @@ def main():
     # إضافة معالجات الأوامر
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("add_time", add_time_start))
-    application.add_handler(CommandHandler("my_times", my_times))
-    application.add_handler(CommandHandler("delete_time", delete_time_start))
+    application.add_handler(CommandHandler("set_interval", set_interval_start))
+    application.add_handler(CommandHandler("my_settings", my_settings))
     application.add_handler(CommandHandler("stop", stop_reminders))
     application.add_handler(CommandHandler("start_reminders", start_reminders))
     
