@@ -168,7 +168,7 @@ async def handle_interval_input(update: Update, context: ContextTypes.DEFAULT_TY
             "❌ يرجى إدخال رقم صحيح!\n\n"
             "🔹 مثال: 5 أو 10 أو 15\n"
             "🔹 من 1 إلى 60 دقيقة\n\n"
-            "💡 جرب مرة أخرى:")
+            "💡 جرب مرة أخرى:",
 async def process_message_queue():
     """معالجة رسائل التذكير من الـ queue"""
     while message_queue:
@@ -176,24 +176,54 @@ async def process_message_queue():
             msg_data = message_queue.pop(0)
             await application.bot.send_message(
                 chat_id=msg_data['user_id'],
-                text=msg_data['message']
+                text=msg_data['message'],
+                read_timeout=10,
+                write_timeout=10,
+                connect_timeout=10
             )
         except Exception as e:
             logger.error(f"فشل إرسال الرسالة: {e}")
+            # إعادة الرسالة للـ queue إذا كان خطأ مؤقت
+            if "timeout" in str(e).lower() or "pool" in str(e).lower():
+                message_queue.append(msg_data)  # إعادة المحاولة
+            break  # توقف لهذه الدورة
 
 def run_schedule():
     """تشغيل المهام المجدولة"""
+    retry_count = 0
+    max_retries = 3
+    
     while True:
-        schedule.run_pending()
-        # معالجة الرسائل المؤجلة
-        if message_queue:
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(process_message_queue())
-                loop.close()
-            except Exception as e:
-                logger.error(f"خطأ في معالجة الرسائل: {e}")
+        try:
+            schedule.run_pending()
+            
+            # معالجة الرسائل المؤجلة
+            if message_queue:
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(process_message_queue())
+                    loop.close()
+                    retry_count = 0  # إعادة تعيين العداد عند النجاح
+                except Exception as e:
+                    logger.error(f"خطأ في معالجة الرسائل: {e}")
+                    retry_count += 1
+                    
+                    if retry_count >= max_retries:
+                        logger.error("تم الوصول للحد الأقصى من المحاولات")
+                        retry_count = 0
+                        # تنظيف الـ queue إذا فشلت كل المحاولات
+                        if len(message_queue) > 10:
+                            message_queue.clear()
+                            logger.info("تم تنظيف queue الرسائل")
+                    
+                    time.sleep(5)  # انتظار قبل المحاولة التالية
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"خطأ في run_schedule: {e}")
+            time.sleep(5)
+            
         time.sleep(1)
 
 async def my_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -361,8 +391,20 @@ def main():
     """الدالة الرئيسية"""
     global application
     
-    # إنشاء التطبيق
-    application = Application.builder().token(BOT_TOKEN).build()
+    # إنشاء التطبيق مع إعدادات timeout محسنة
+    application = Application.builder().token(BOT_TOKEN).read_timeout(15).write_timeout(15).connect_timeout(15).build()
+    
+    # إضافة معالج الأخطاء العام
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """معالج الأخطاء العام"""
+        logger.error(f"Exception while handling an update: {context.error}")
+        
+        # إذا كان timeout، نحاول مرة أخرى
+        if "timeout" in str(context.error).lower():
+            logger.info("محاولة إعادة الاتصال...")
+            await asyncio.sleep(2)
+    
+    application.add_error_handler(error_handler)
     
     # إضافة معالجات الأوامر
     application.add_handler(CommandHandler("start", start))
