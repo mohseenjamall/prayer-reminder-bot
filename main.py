@@ -172,129 +172,54 @@ async def handle_interval_input(update: Update, context: ContextTypes.DEFAULT_TY
             "❌ يرجى إدخال رقم صحيح!\n\n"
             "🔹 مثال: 5 أو 10 أو 15\n"
             "🔹 من 1 إلى 60 دقيقة\n\n"
-            "💡 جرب مرة أخرى:")
+            "💡 جرب مرة أخرى:",
 async def process_message_queue():
     """معالجة رسائل التذكير من الـ queue"""
     processed = 0
-    max_batch = 5  # معالجة 5 رسائل كحد أقصى في كل دورة
     
-    while message_queue and processed < max_batch:
+    while message_queue and processed < 10:  # معالج أكثر رسائل في المرة
         try:
             msg_data = message_queue.pop(0)
             
-            # تحقق من عمر الرسالة (لا ترسل رسائل قديمة جداً)
-            if 'timestamp' in msg_data:
-                msg_time = datetime.fromisoformat(msg_data['timestamp'])
-                age_minutes = (datetime.now() - msg_time).total_seconds() / 60
-                if age_minutes > 10:  # تجاهل الرسائل الأقدم من 10 دقائق
-                    logger.warning(f"تجاهل رسالة قديمة للمستخدم {msg_data['user_id']}")
-                    continue
-            
             await application.bot.send_message(
                 chat_id=msg_data['user_id'],
-                text=msg_data['message'],
-                read_timeout=8,
-                write_timeout=8,
-                connect_timeout=8
+                text=msg_data['message']
             )
             
             processed += 1
-            logger.info(f"تم إرسال تذكير للمستخدم {msg_data['user_id']}")
-            
-            # انتظار قصير بين الرسائل لتجنب rate limiting
-            await asyncio.sleep(0.5)
+            logger.info(f"✅ تم إرسال تذكير للمستخدم {msg_data['user_id']}")
             
         except Exception as e:
-            logger.error(f"فشل إرسال الرسالة: {e}")
-            
-            # إعادة الرسالة للـ queue إذا كان خطأ مؤقت
-            if any(keyword in str(e).lower() for keyword in ["timeout", "pool", "network"]):
-                # إعادة في النهاية وليس البداية لتجنب الحلقة المفرغة
-                message_queue.append(msg_data)
-                logger.info("تم إعادة الرسالة للـ queue للمحاولة لاحقاً")
-            
-            break  # توقف لهذه الدورة
+            logger.error(f"❌ فشل إرسال الرسالة: {e}")
+            break  # توقف عند أي خطأ
 
 def run_schedule():
     """تشغيل المهام المجدولة"""
-    retry_count = 0
-    max_retries = 3
-    last_schedule_run = time.time()
-    
-    logger.info("بدء تشغيل المجدول...")
+    logger.info("🚀 بدء تشغيل المجدول...")
     
     while True:
         try:
-            current_time = time.time()
-            
-            # تشغيل المهام المجدولة كل ثانية
+            # تشغيل المهام المجدولة
             schedule.run_pending()
             
-            # معالجة الرسائل كل 2 ثانية أو عند وجود رسائل عاجلة
-            if message_queue and (current_time - last_schedule_run >= 2 or len(message_queue) > 0):
+            # معالجة الرسائل إذا كان هناك أي رسائل
+            if message_queue:
+                logger.info(f"📨 معالجة {len(message_queue)} رسالة في الـ queue")
                 try:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     loop.run_until_complete(process_message_queue())
                     loop.close()
-                    
-                    retry_count = 0  # إعادة تعيين العداد عند النجاح
-                    last_schedule_run = current_time
-                    
+                    logger.info("✅ تم معالجة الرسائل بنجاح")
                 except Exception as e:
-                    logger.error(f"خطأ في معالجة الرسائل: {e}")
-                    retry_count += 1
-                    
-                    if retry_count >= max_retries:
-                        logger.error(f"تم الوصول للحد الأقصى من المحاولات ({max_retries})")
-                        retry_count = 0
-                        
-                        # تنظيف الـ queue إذا امتلأ (أكثر من 20 رسالة)
-                        if len(message_queue) > 20:
-                            # احتفظ بأحدث 5 رسائل فقط
-                            message_queue[:] = message_queue[-5:]
-                            logger.warning("تم تنظيف queue الرسائل - احتفظنا بأحدث 5 رسائل")
-                    
-                    time.sleep(2)  # انتظار أطول عند وجود خطأ
-                    continue
-            
-            # تنظيف دوري للرسائل القديمة كل 5 دقائق
-            if int(current_time) % 300 == 0:  # كل 5 دقائق
-                cleanup_old_messages()
+                    logger.error(f"❌ خطأ في معالجة الرسائل: {e}")
                     
         except Exception as e:
-            logger.error(f"خطأ عام في run_schedule: {e}")
-            time.sleep(3)
+            logger.error(f"❌ خطأ عام في run_schedule: {e}")
             
-        # تردد أعلى لمعالجة أسرع
-        time.sleep(0.5)  # نصف ثانية بدلاً من ثانية كاملة
+        time.sleep(1)
 
-def cleanup_old_messages():
-    """تنظيف الرسائل القديمة من الـ queue"""
-    if not message_queue:
-        return
-        
-    current_time = datetime.now()
-    cleaned_queue = []
-    
-    for msg in message_queue:
-        if 'timestamp' in msg:
-            try:
-                msg_time = datetime.fromisoformat(msg['timestamp'])
-                age_minutes = (current_time - msg_time).total_seconds() / 60
-                if age_minutes <= 15:  # احتفظ بالرسائل الأحدث من 15 دقيقة
-                    cleaned_queue.append(msg)
-            except:
-                # إذا فشل parsing التوقيت، احتفظ بالرسالة
-                cleaned_queue.append(msg)
-        else:
-            # رسائل بدون timestamp، احتفظ بها
-            cleaned_queue.append(msg)
-    
-    removed_count = len(message_queue) - len(cleaned_queue)
-    if removed_count > 0:
-        message_queue[:] = cleaned_queue
-        logger.info(f"تم حذف {removed_count} رسالة قديمة من الـ queue")
+
 
 async def my_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض إعدادات المستخدم"""
@@ -404,38 +329,28 @@ def start_user_reminders(user_id: int):
             # اختيار رسالة عشوائية
             message = random.choice(prayer_messages)
             
-            # إضافة الرسالة للـ queue بأولوية عالية
-            message_queue.insert(0, {  # إدراج في البداية للأولوية
+            # إضافة الرسالة للـ queue
+            message_queue.append({
                 'user_id': user_id,
                 'message': f"{message}\n\n💫 تذكير من بوت الصلاة على النبي ﷺ",
                 'timestamp': datetime.now().isoformat()
             })
             
-            logger.info(f"تم جدولة تذكير للمستخدم {user_id}")
+            logger.info(f"تم إضافة تذكير للـ queue للمستخدم {user_id}")
             
         except Exception as e:
             logger.error(f"خطأ في إرسال التذكير للمستخدم {user_id}: {e}")
     
-    # إنشاء المهمة المجدولة - بدء فوري ثم كل interval
+    # إنشاء المهمة المجدولة
     job = schedule.every(interval).minutes.do(send_reminder)
-    
-    # إرسال أول تذكير بعد دقيقة واحدة (للاختبار السريع)
-    first_reminder_job = schedule.every(1).minutes.do(send_reminder)
     
     # حفظ المهمة
     scheduled_jobs[user_id] = job
     
-    # إلغاء المهمة الأولى بعد تنفيذها
-    def cancel_first_reminder():
-        try:
-            schedule.cancel_job(first_reminder_job)
-        except:
-            pass
+    # إرسال تذكير فوري للاختبار
+    send_reminder()
     
-    # جدولة إلغاء المهمة الأولى بعد دقيقتين
-    schedule.every(2).minutes.do(cancel_first_reminder).tag(f'cleanup_{user_id}')
-    
-    logger.info(f"تم بدء تذكيرات للمستخدم {user_id} كل {interval} دقيقة (أول تذكير خلال دقيقة)")
+    logger.info(f"✅ تم بدء تذكيرات للمستخدم {user_id} كل {interval} دقيقة")
 
 def restart_user_reminders(user_id: int):
     """إعادة تشغيل تذكيرات المستخدم بفترة جديدة"""
