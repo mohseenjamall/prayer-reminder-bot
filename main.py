@@ -173,25 +173,7 @@ async def handle_interval_input(update: Update, context: ContextTypes.DEFAULT_TY
             "🔹 مثال: 5 أو 10 أو 15\n"
             "🔹 من 1 إلى 60 دقيقة\n\n"
             "💡 جرب مرة أخرى:")
-async def process_message_queue():
-    """معالجة رسائل التذكير من الـ queue"""
-    processed = 0
-    
-    while message_queue and processed < 10:  # معالج أكثر رسائل في المرة
-        try:
-            msg_data = message_queue.pop(0)
-            
-            await application.bot.send_message(
-                chat_id=msg_data['user_id'],
-                text=msg_data['message']
-            )
-            
-            processed += 1
-            logger.info(f"✅ تم إرسال تذكير للمستخدم {msg_data['user_id']}")
-            
-        except Exception as e:
-            logger.error(f"❌ فشل إرسال الرسالة: {e}")
-            break  # توقف عند أي خطأ
+
 
 def run_schedule():
     """تشغيل المهام المجدولة"""
@@ -204,20 +186,47 @@ def run_schedule():
             
             # معالجة الرسائل إذا كان هناك أي رسائل
             if message_queue:
-                logger.info(f"📨 معالجة {len(message_queue)} رسالة في الـ queue")
-                try:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(process_message_queue())
-                    loop.close()
-                    logger.info("✅ تم معالجة الرسائل بنجاح")
-                except Exception as e:
-                    logger.error(f"❌ خطأ في معالجة الرسائل: {e}")
+                logger.info(f"📨 يوجد {len(message_queue)} رسالة للمعالجة")
+                
+                # معالجة رسالة واحدة فقط في كل مرة
+                if message_queue:
+                    msg_data = message_queue.pop(0)
                     
+                    try:
+                        # إنشاء loop جديد منفصل
+                        import threading
+                        
+                        def send_in_thread():
+                            loop = asyncio.new_event_loop()
+                            asyncio.set_event_loop(loop)
+                            
+                            async def send_message():
+                                try:
+                                    await application.bot.send_message(
+                                        chat_id=msg_data['user_id'],
+                                        text=msg_data['message']
+                                    )
+                                    logger.info(f"✅ تم إرسال تذكير للمستخدم {msg_data['user_id']}")
+                                except Exception as e:
+                                    logger.error(f"❌ فشل إرسال الرسالة: {e}")
+                            
+                            loop.run_until_complete(send_message())
+                            loop.close()
+                        
+                        # تشغيل في thread منفصل
+                        thread = threading.Thread(target=send_in_thread)
+                        thread.start()
+                        thread.join(timeout=10)  # انتظار 10 ثوان كحد أقصى
+                        
+                    except Exception as e:
+                        logger.error(f"❌ خطأ في thread: {e}")
+                        # إعادة الرسالة للـ queue
+                        message_queue.append(msg_data)
+                        
         except Exception as e:
             logger.error(f"❌ خطأ عام في run_schedule: {e}")
             
-        time.sleep(1)
+        time.sleep(2)  # راحة أكبر
 
 
 
@@ -332,11 +341,10 @@ def start_user_reminders(user_id: int):
             # إضافة الرسالة للـ queue
             message_queue.append({
                 'user_id': user_id,
-                'message': f"{message}\n\n💫 تذكير من بوت الصلاة على النبي ﷺ",
-                'timestamp': datetime.now().isoformat()
+                'message': f"{message}\n\n💫 تذكير من بوت الصلاة على النبي ﷺ"
             })
             
-            logger.info(f"تم إضافة تذكير للـ queue للمستخدم {user_id}")
+            logger.info(f"📝 تم إضافة تذكير للـ queue للمستخدم {user_id}")
             
         except Exception as e:
             logger.error(f"خطأ في إرسال التذكير للمستخدم {user_id}: {e}")
