@@ -60,16 +60,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         users_data[user_id] = {
             'username': username,
             'interval': DEFAULT_INTERVAL,  # الفترة الافتراضية
-            'is_active': True,
+            'is_active': True,  # مفعل تلقائياً
             'created_at': datetime.now().isoformat(),
             'last_reminder': None
         }
-        # بدء التذكيرات للمستخدم الجديد
+        # بدء التذكيرات للمستخدم الجديد تلقائياً
         start_user_reminders(user_id)
+        logger.info(f"مستخدم جديد {user_id} - تم بدء التذكيرات تلقائياً")
     else:
-        # إذا كان المستخدم موجود وتم إيقاف التذكيرات، نعيد تشغيلها
+        # للمستخدمين الموجودين، تحقق من حالة التفعيل
         if users_data[user_id]['is_active'] and user_id not in scheduled_jobs:
             start_user_reminders(user_id)
+            logger.info(f"إعادة تفعيل التذكيرات للمستخدم {user_id}")
     
     welcome_message = f"""
 🌟 أهلاً وسهلاً {username}!
@@ -77,7 +79,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🤲 هذا بوت تذكير الصلاة على النبي محمد ﷺ
 
 📱 الميزات المتاحة:
-• تذكير كل {DEFAULT_INTERVAL} دقائق (افتراضي)
+• تذكير كل {DEFAULT_INTERVAL} دقائق (مفعل تلقائياً ✅)
 • يمكن تغيير الفترة من 1 دقيقة إلى 60 دقيقة
 • رسائل تذكير متنوعة
 • تحكم كامل في التذكيرات
@@ -86,6 +88,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /set_interval - تغيير فترة التذكير
 /my_settings - عرض إعداداتي
 /help - المساعدة
+
+✨ التذكيرات تعمل الآن! ستصلك رسالة خلال {DEFAULT_INTERVAL} دقائق
 
 بارك الله فيك! 🌹
 """
@@ -171,60 +175,126 @@ async def handle_interval_input(update: Update, context: ContextTypes.DEFAULT_TY
             "💡 جرب مرة أخرى:")
 async def process_message_queue():
     """معالجة رسائل التذكير من الـ queue"""
-    while message_queue:
+    processed = 0
+    max_batch = 5  # معالجة 5 رسائل كحد أقصى في كل دورة
+    
+    while message_queue and processed < max_batch:
         try:
             msg_data = message_queue.pop(0)
+            
+            # تحقق من عمر الرسالة (لا ترسل رسائل قديمة جداً)
+            if 'timestamp' in msg_data:
+                msg_time = datetime.fromisoformat(msg_data['timestamp'])
+                age_minutes = (datetime.now() - msg_time).total_seconds() / 60
+                if age_minutes > 10:  # تجاهل الرسائل الأقدم من 10 دقائق
+                    logger.warning(f"تجاهل رسالة قديمة للمستخدم {msg_data['user_id']}")
+                    continue
+            
             await application.bot.send_message(
                 chat_id=msg_data['user_id'],
                 text=msg_data['message'],
-                read_timeout=10,
-                write_timeout=10,
-                connect_timeout=10
+                read_timeout=8,
+                write_timeout=8,
+                connect_timeout=8
             )
+            
+            processed += 1
+            logger.info(f"تم إرسال تذكير للمستخدم {msg_data['user_id']}")
+            
+            # انتظار قصير بين الرسائل لتجنب rate limiting
+            await asyncio.sleep(0.5)
+            
         except Exception as e:
             logger.error(f"فشل إرسال الرسالة: {e}")
+            
             # إعادة الرسالة للـ queue إذا كان خطأ مؤقت
-            if "timeout" in str(e).lower() or "pool" in str(e).lower():
-                message_queue.append(msg_data)  # إعادة المحاولة
+            if any(keyword in str(e).lower() for keyword in ["timeout", "pool", "network"]):
+                # إعادة في النهاية وليس البداية لتجنب الحلقة المفرغة
+                message_queue.append(msg_data)
+                logger.info("تم إعادة الرسالة للـ queue للمحاولة لاحقاً")
+            
             break  # توقف لهذه الدورة
 
 def run_schedule():
     """تشغيل المهام المجدولة"""
     retry_count = 0
     max_retries = 3
+    last_schedule_run = time.time()
+    
+    logger.info("بدء تشغيل المجدول...")
     
     while True:
         try:
+            current_time = time.time()
+            
+            # تشغيل المهام المجدولة كل ثانية
             schedule.run_pending()
             
-            # معالجة الرسائل المؤجلة
-            if message_queue:
+            # معالجة الرسائل كل 2 ثانية أو عند وجود رسائل عاجلة
+            if message_queue and (current_time - last_schedule_run >= 2 or len(message_queue) > 0):
                 try:
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     loop.run_until_complete(process_message_queue())
                     loop.close()
+                    
                     retry_count = 0  # إعادة تعيين العداد عند النجاح
+                    last_schedule_run = current_time
+                    
                 except Exception as e:
                     logger.error(f"خطأ في معالجة الرسائل: {e}")
                     retry_count += 1
                     
                     if retry_count >= max_retries:
-                        logger.error("تم الوصول للحد الأقصى من المحاولات")
+                        logger.error(f"تم الوصول للحد الأقصى من المحاولات ({max_retries})")
                         retry_count = 0
-                        # تنظيف الـ queue إذا فشلت كل المحاولات
-                        if len(message_queue) > 10:
-                            message_queue.clear()
-                            logger.info("تم تنظيف queue الرسائل")
+                        
+                        # تنظيف الـ queue إذا امتلأ (أكثر من 20 رسالة)
+                        if len(message_queue) > 20:
+                            # احتفظ بأحدث 5 رسائل فقط
+                            message_queue[:] = message_queue[-5:]
+                            logger.warning("تم تنظيف queue الرسائل - احتفظنا بأحدث 5 رسائل")
                     
-                    time.sleep(5)  # انتظار قبل المحاولة التالية
+                    time.sleep(2)  # انتظار أطول عند وجود خطأ
                     continue
+            
+            # تنظيف دوري للرسائل القديمة كل 5 دقائق
+            if int(current_time) % 300 == 0:  # كل 5 دقائق
+                cleanup_old_messages()
                     
         except Exception as e:
-            logger.error(f"خطأ في run_schedule: {e}")
-            time.sleep(5)
+            logger.error(f"خطأ عام في run_schedule: {e}")
+            time.sleep(3)
             
-        time.sleep(1)
+        # تردد أعلى لمعالجة أسرع
+        time.sleep(0.5)  # نصف ثانية بدلاً من ثانية كاملة
+
+def cleanup_old_messages():
+    """تنظيف الرسائل القديمة من الـ queue"""
+    if not message_queue:
+        return
+        
+    current_time = datetime.now()
+    cleaned_queue = []
+    
+    for msg in message_queue:
+        if 'timestamp' in msg:
+            try:
+                msg_time = datetime.fromisoformat(msg['timestamp'])
+                age_minutes = (current_time - msg_time).total_seconds() / 60
+                if age_minutes <= 15:  # احتفظ بالرسائل الأحدث من 15 دقيقة
+                    cleaned_queue.append(msg)
+            except:
+                # إذا فشل parsing التوقيت، احتفظ بالرسالة
+                cleaned_queue.append(msg)
+        else:
+            # رسائل بدون timestamp، احتفظ بها
+            cleaned_queue.append(msg)
+    
+    removed_count = len(message_queue) - len(cleaned_queue)
+    if removed_count > 0:
+        message_queue[:] = cleaned_queue
+        logger.info(f"تم حذف {removed_count} رسالة قديمة من الـ queue")
 
 async def my_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """عرض إعدادات المستخدم"""
@@ -309,38 +379,63 @@ async def start_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def start_user_reminders(user_id: int):
     """بدء تذكيرات المستخدم"""
     if user_id not in users_data:
+        logger.warning(f"محاولة بدء تذكيرات لمستخدم غير موجود: {user_id}")
         return
     
     # إيقاف أي تذكيرات سابقة أولاً
     if user_id in scheduled_jobs:
         schedule.cancel_job(scheduled_jobs[user_id])
         del scheduled_jobs[user_id]
+        logger.info(f"تم إلغاء التذكيرات السابقة للمستخدم {user_id}")
     
     interval = users_data[user_id]['interval']
     
     def send_reminder():
         """إرسال التذكير"""
         try:
+            # التأكد من أن المستخدم ما زال مفعل
+            if user_id not in users_data or not users_data[user_id]['is_active']:
+                logger.info(f"تجاهل تذكير للمستخدم {user_id} - غير مفعل")
+                return
+                
             # تحديث وقت آخر تذكير
             users_data[user_id]['last_reminder'] = datetime.now().isoformat()
             
             # اختيار رسالة عشوائية
             message = random.choice(prayer_messages)
             
-            # إضافة الرسالة للـ queue بدلاً من الإرسال المباشر
-            message_queue.append({
+            # إضافة الرسالة للـ queue بأولوية عالية
+            message_queue.insert(0, {  # إدراج في البداية للأولوية
                 'user_id': user_id,
-                'message': f"{message}\n\n💫 تذكير من بوت الصلاة على النبي ﷺ"
+                'message': f"{message}\n\n💫 تذكير من بوت الصلاة على النبي ﷺ",
+                'timestamp': datetime.now().isoformat()
             })
+            
+            logger.info(f"تم جدولة تذكير للمستخدم {user_id}")
             
         except Exception as e:
             logger.error(f"خطأ في إرسال التذكير للمستخدم {user_id}: {e}")
     
-    # إنشاء المهمة المجدولة
+    # إنشاء المهمة المجدولة - بدء فوري ثم كل interval
     job = schedule.every(interval).minutes.do(send_reminder)
+    
+    # إرسال أول تذكير بعد دقيقة واحدة (للاختبار السريع)
+    first_reminder_job = schedule.every(1).minutes.do(send_reminder)
     
     # حفظ المهمة
     scheduled_jobs[user_id] = job
+    
+    # إلغاء المهمة الأولى بعد تنفيذها
+    def cancel_first_reminder():
+        try:
+            schedule.cancel_job(first_reminder_job)
+        except:
+            pass
+    
+    # جدولة إلغاء المهمة الأولى بعد دقيقتين
+    schedule.every(2).minutes.do(cancel_first_reminder).tag(f'cleanup_{user_id}')
+    
+    logger.info(f"تم بدء تذكيرات للمستخدم {user_id} كل {interval} دقيقة (أول تذكير خلال دقيقة)")
 
 def restart_user_reminders(user_id: int):
     """إعادة تشغيل تذكيرات المستخدم بفترة جديدة"""
