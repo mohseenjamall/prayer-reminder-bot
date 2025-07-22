@@ -172,7 +172,7 @@ async def handle_interval_input(update: Update, context: ContextTypes.DEFAULT_TY
             "❌ يرجى إدخال رقم صحيح!\n\n"
             "🔹 مثال: 5 أو 10 أو 15\n"
             "🔹 من 1 إلى 60 دقيقة\n\n"
-            "💡 جرب مرة أخرى:",
+            "💡 جرب مرة أخرى:")
 async def process_message_queue():
     """معالجة رسائل التذكير من الـ queue"""
     processed = 0
